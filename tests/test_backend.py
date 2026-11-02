@@ -150,6 +150,41 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         service.snapshot(True)
         self.assertNotIn("captcha", self.bridge.last()["accounts"][0])
 
+    async def test_proxy_settings_save_without_exposing_credentials(self):
+        service = self.service(Site())
+        await service.dispatch(
+            {
+                "command": "save_proxies",
+                "proxy_enabled": True,
+                "proxy_text": "proxy.example.com:8000:user:secret\n",
+            }
+        )
+        service.snapshot(True)
+        snapshot = self.bridge.last()
+        self.assertTrue(snapshot["proxy"]["enabled"])
+        self.assertEqual(snapshot["proxy"]["total"], 1)
+        self.assertEqual(snapshot["proxy"]["ready"], 1)
+        encoded = json.dumps(snapshot)
+        self.assertNotIn("user:secret", encoded)
+        self.assertNotIn("secret", encoded)
+
+        await service.handle({"id": 9, "command": "proxy_config"})
+        event = [
+            item for item in self.bridge.events if item["type"] == "proxy_text"
+        ][-1]
+        self.assertEqual(event["id"], 9)
+        self.assertIn("proxy.example.com:8000:user:secret", event["text"])
+
+        await service.dispatch(
+            {
+                "command": "save_proxies",
+                "proxy_enabled": False,
+                "proxy_text": "proxy.example.com:8000:user:secret\n",
+            }
+        )
+        service.snapshot(True)
+        self.assertFalse(self.bridge.last()["proxy"]["enabled"])
+
     async def test_verification_activity_is_exposed_and_cleared(self):
         site = Site()
         service = self.service(site)

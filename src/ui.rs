@@ -76,6 +76,7 @@ struct Field {
     value: String,
     password: bool,
     fresh: bool,
+    multiline: bool,
     choices: Vec<&'static str>,
 }
 impl Field {
@@ -86,6 +87,18 @@ impl Field {
             value,
             password: false,
             fresh: true,
+            multiline: false,
+            choices: vec![],
+        }
+    }
+    fn multiline(key: &'static str, label: impl Into<String>, value: String) -> Self {
+        Self {
+            key,
+            label: label.into(),
+            value,
+            password: false,
+            fresh: false,
+            multiline: true,
             choices: vec![],
         }
     }
@@ -101,10 +114,29 @@ impl Field {
             value,
             password: false,
             fresh: false,
+            multiline: false,
             choices,
         }
     }
     fn input(&mut self, c: char) {
+        if self.multiline {
+            if c == '\r' {
+                return;
+            }
+            if c == '\n' {
+                if self.value.len() < 65_536 {
+                    self.value.push('\n');
+                }
+                return;
+            }
+            if c.is_control() {
+                return;
+            }
+            if self.value.len() < 65_536 {
+                self.value.push(c);
+            }
+            return;
+        }
         if c.is_control() || !self.choices.is_empty() {
             return;
         }
@@ -187,6 +219,8 @@ enum Action {
     Resume(bool),
     Stop(bool),
     Settings,
+    Proxy,
+    ProxyCheck,
     DialogField(usize),
     DialogSave,
     DialogCancel,
@@ -211,6 +245,7 @@ struct App {
     actions: Vec<(Rect, Action)>,
     sequence: u64,
     pending_form: Option<u64>,
+    pending_proxy: Option<u64>,
     updated: Instant,
     animation: Instant,
     expanded: bool,
@@ -243,6 +278,7 @@ impl App {
             actions: vec![],
             sequence: 0,
             pending_form: None,
+            pending_proxy: None,
             updated: Instant::now(),
             animation: Instant::now(),
             expanded: false,
@@ -271,10 +307,10 @@ impl App {
     fn uid(&self) -> Option<String> {
         self.selected_account().map(|a| string(a, "id").to_owned())
     }
-    fn send(&mut self, mut data: Value) {
+    fn send(&mut self, mut data: Value) -> Option<u64> {
         if self.demo {
             self.message = "Preview only; live account actions are disabled".into();
-            return;
+            return None;
         }
         let command = string(&data, "command").to_owned();
         let scope = string(&data, "account_id").to_owned();
@@ -283,22 +319,53 @@ impl App {
             .iter()
             .any(|(_, c, a)| c == &command && a == &scope)
         {
-            return;
+            return None;
         }
         self.sequence += 1;
-        self.pending_actions.push((self.sequence, command, scope));
-        data["id"] = json!(self.sequence);
+        let id = self.sequence;
+        self.pending_actions.push((id, command, scope));
+        data["id"] = json!(id);
         if let Some(tx) = &self.tx {
             if tx.send(data.to_string()).is_err() {
                 self.message = "Engine is unavailable; restart the app".into();
                 self.error = true;
+                return None;
             }
         }
+        Some(id)
     }
     fn notify(&mut self, message: &str) {
         self.message = message.into();
         self.error = false;
         self.updated = Instant::now();
+    }
+    fn paste(&mut self, text: &str) {
+        if self.pending_form.is_some() {
+            return;
+        }
+        let Some(dialog) = &mut self.dialog else {
+            return;
+        };
+        let target = dialog
+            .fields
+            .get(dialog.focus)
+            .filter(|field| field.choices.is_empty())
+            .map(|_| dialog.focus)
+            .or_else(|| dialog.fields.iter().position(|field| field.multiline))
+            .or_else(|| {
+                dialog
+                    .fields
+                    .iter()
+                    .position(|field| field.choices.is_empty())
+            });
+        if let Some(index) = target
+            && let Some(field) = dialog.fields.get_mut(index)
+        {
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            for c in normalized.chars() {
+                field.input(c);
+            }
+        }
     }
     fn accept(&mut self, line: &str) -> Result<()> {
         let event: Value = serde_json::from_str(line)?;
@@ -341,6 +408,13 @@ impl App {
                 self.theme = theme::find(string(&self.snapshot["settings"], "theme"));
                 self.selected = self.selected.min(self.accounts().len().saturating_sub(1));
             }
+            "proxy_text" => {
+                if self.pending_proxy == event["id"].as_u64() {
+                    self.pending_proxy = None;
+                    self.proxy_dialog(string(&event, "text").to_owned(), truth(&event, "enabled"));
+                    self.notify("Edit proxies, then save");
+                }
+            }
             "account_saved" => {
                 if let Some(i) = self
                     .accounts()
@@ -359,6 +433,9 @@ impl App {
             "result" => {
                 self.pending_actions
                     .retain(|(id, _, _)| Some(*id) != event["id"].as_u64());
+                if self.pending_proxy == event["id"].as_u64() {
+                    self.pending_proxy = None;
+                }
                 if self.pending_form == event["id"].as_u64() && self.pending_form.is_some() {
                     self.pending_form = None;
                     if truth(&event, "ok") {
@@ -510,6 +587,49 @@ impl App {
             note: "Shared by all accounts. Ranges apply on the next interval.".into(),
         });
     }
+    fn proxy_dialog(&mut self, text: String, enabled: bool) {
+        let fields = vec![
+            Field::choice(
+                "proxy_enabled",
+                "Use proxies",
+                if enabled {
+                    "true".into()
+                } else {
+                    "false".into()
+                },
+                vec!["true", "false"],
+            ),
+            Field::multiline(
+                "proxy_text",
+                "One per line: host:port:username:password",
+                text,
+            ),
+        ];
+        self.dialog = Some(Dialog {
+            title: "Proxy setup".into(),
+            kind: "proxies",
+            account_id: None,
+            fields,
+            focus: 1,
+            note: "One per line:\nhost:port:user:pass".into(),
+        });
+    }
+    fn request_proxy_dialog(&mut self) {
+        if self.demo {
+            self.proxy_dialog(
+                "proxy1.example.com:8000:user1:pass1\nproxy2.example.com:8000:user2:pass2\n".into(),
+                true,
+            );
+            return;
+        }
+        if self.pending_proxy.is_some() {
+            return;
+        }
+        if let Some(id) = self.send(json!({"command":"proxy_config"})) {
+            self.pending_proxy = Some(id);
+            self.notify("Loading proxy list...");
+        }
+    }
 
     fn confirm(&mut self, kind: &'static str) {
         let account = if kind == "clear_history" {
@@ -556,7 +676,10 @@ impl App {
         for field in &d.fields {
             values.insert(
                 field.key.into(),
-                if matches!(field.key, "enabled" | "reduced_motion" | "rests_enabled") {
+                if matches!(
+                    field.key,
+                    "enabled" | "reduced_motion" | "rests_enabled" | "proxy_enabled"
+                ) {
                     json!(field.value == "true")
                 } else {
                     json!(&field.value)
@@ -573,6 +696,18 @@ impl App {
                 Value::Object(values)
             }
             "settings" => json!({"command":"settings","settings":values}),
+            "proxies" => {
+                let enabled = values
+                    .get("proxy_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let text = values
+                    .get("proxy_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                json!({"command":"save_proxies","proxy_enabled":enabled,"proxy_text":text})
+            }
             kind => {
                 json!({"command":kind,"account_id":d.account_id,"confirmed":kind=="clear_history"})
             }
@@ -581,10 +716,10 @@ impl App {
             self.send(request);
             return;
         }
-        self.send(request);
-        self.pending_form = Some(self.sequence);
+        let sent = self.send(request);
+        self.pending_form = sent;
         if let Some(d) = &mut self.dialog {
-            d.note = "Saving settings; please wait...".into();
+            d.note = "Saving; please wait...".into();
         }
     }
     fn action(&mut self, action: Action) {
@@ -655,6 +790,14 @@ impl App {
                 }
             }
             Action::Settings => self.settings_dialog(),
+            Action::Proxy => self.request_proxy_dialog(),
+            Action::ProxyCheck => {
+                if self.demo {
+                    self.notify("Preview only; proxy checks are disabled");
+                } else if self.send(json!({"command":"check_proxies"})).is_some() {
+                    self.notify("Checking proxies...");
+                }
+            }
             Action::DialogField(i) => {
                 if let Some(d) = &mut self.dialog {
                     d.focus_to(i);
@@ -705,11 +848,29 @@ impl App {
         if self.dialog.is_some() && self.pending_form.is_some() {
             return;
         }
+        if self.dialog.is_some()
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('u')
+        {
+            if let Some(d) = &mut self.dialog {
+                if let Some(field) = d.fields.get_mut(d.focus) {
+                    if field.choices.is_empty() {
+                        field.value.clear();
+                        field.fresh = false;
+                    }
+                }
+            }
+            return;
+        }
         if let Some(d) = &mut self.dialog {
             match key.code {
                 KeyCode::Esc => self.close_dialog(),
                 KeyCode::Enter => {
-                    if d.focus == d.fields.len() + 1 {
+                    if d.fields.get(d.focus).is_some_and(|f| f.multiline) {
+                        if let Some(field) = d.fields.get_mut(d.focus) {
+                            field.input('\n');
+                        }
+                    } else if d.focus == d.fields.len() + 1 {
                         self.close_dialog();
                     } else if d.fields.is_empty() || d.focus + 1 >= d.fields.len() {
                         self.save_dialog()
@@ -747,7 +908,7 @@ impl App {
                     if let Some(field) = d.fields.get_mut(d.focus) {
                         if field.choices.is_empty()
                             && !c.is_control()
-                            && (field.fresh || field.value.len() < 256)
+                            && (field.fresh || field.multiline || field.value.len() < 256)
                         {
                             field.input(c)
                         } else if !field.choices.is_empty() && c == ' ' {
@@ -823,6 +984,8 @@ impl App {
             KeyCode::Char('v') if self.tab == 1 => self.action(Action::Check),
             KeyCode::Char(' ') if self.tab == 1 => self.action(Action::Toggle),
             KeyCode::Char('d') if self.tab == 1 => self.action(Action::Remove),
+            KeyCode::Char('p') if self.tab == 2 => self.action(Action::Proxy),
+            KeyCode::Char('c') if self.tab == 2 => self.action(Action::ProxyCheck),
             KeyCode::Enter | KeyCode::Char('e') if self.tab == 2 => self.action(Action::Settings),
             _ => {}
         }
@@ -1859,7 +2022,16 @@ fn accounts(f: &mut Frame, app: &mut App, rect: Rect) {
         text_row(
             f,
             Rect::new(r.x, r.y + 1, r.width, 1),
-            format!("{} · {}", task_label(string(&a, "task")), daily_limit(&a),),
+            format!(
+                "{} · {}{}",
+                task_label(string(&a, "task")),
+                daily_limit(&a),
+                if string(&a, "proxy_endpoint").is_empty() {
+                    String::new()
+                } else {
+                    format!(" · via {}", string(&a, "proxy_endpoint"))
+                }
+            ),
             t.muted,
         );
         text_row(
@@ -1920,6 +2092,30 @@ fn accounts(f: &mut Frame, app: &mut App, rect: Rect) {
 fn settings(f: &mut Frame, app: &mut App, rect: Rect) {
     let t = app.theme;
     let s = &app.snapshot["settings"];
+    let proxy = &app.snapshot["proxy"];
+    let proxy_enabled = truth(proxy, "enabled");
+    let proxy_line = if proxy_enabled {
+        format!(
+            "Proxy  On · {} ready · {} assigned",
+            num(proxy, "ready"),
+            num(proxy, "assigned")
+        )
+    } else if num(proxy, "total") > 0 {
+        format!("Proxy  Off · {} saved", num(proxy, "total"))
+    } else {
+        "Proxy  Off".into()
+    };
+    let proxy_detail = if !string(proxy, "error").is_empty() {
+        format!("       {}", string(proxy, "error"))
+    } else if proxy_enabled {
+        format!(
+            "       {} dead · {} blocked",
+            num(proxy, "dead"),
+            num(proxy, "blocked")
+        )
+    } else {
+        "       Add proxies in Settings".into()
+    };
     let lines = vec![
         Line::raw(format!(
             "Delay  {}–{}s",
@@ -1951,6 +2147,8 @@ fn settings(f: &mut Frame, app: &mut App, rect: Rect) {
             value_text(s, "retry_delay", "5")
         )),
         Line::raw(format!("Unknown {}", value_text(s, "on_unknown", "stop"))),
+        Line::raw(proxy_line),
+        Line::styled(proxy_detail, Style::default().fg(t.muted)),
         Line::styled(
             "Pacing applies to all accounts.",
             Style::default().fg(t.muted),
@@ -1970,7 +2168,11 @@ fn settings(f: &mut Frame, app: &mut App, rect: Rect) {
             rect.width,
             1,
         ),
-        vec![("Edit", Action::Settings)],
+        vec![
+            ("Edit", Action::Settings),
+            ("Proxies", Action::Proxy),
+            ("Check", Action::ProxyCheck),
+        ],
     );
 }
 
@@ -2171,7 +2373,164 @@ fn history(f: &mut Frame, app: &mut App, rect: Rect) {
         }
     }
 }
+fn wrap_proxy_lines(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![];
+    }
+    let mut lines = Vec::new();
+    for line in text.split('\n') {
+        if line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        for chunk in chars.chunks(width) {
+            lines.push(chunk.iter().collect());
+        }
+    }
+    lines
+}
+
+fn proxies_dialog(f: &mut Frame, app: &mut App, area: Rect) {
+    let t = app.theme;
+    let (note, enabled, text, focus, saving) = {
+        let d = app.dialog.as_ref().unwrap();
+        (
+            d.note.clone(),
+            d.fields.first().is_some_and(|field| field.value == "true"),
+            d.fields
+                .get(1)
+                .map(|field| field.value.clone())
+                .unwrap_or_default(),
+            d.focus,
+            app.pending_form.is_some(),
+        )
+    };
+    let width = area.width.saturating_sub(2).min(76);
+    let height = area.height.saturating_sub(2).min(24);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    f.render_widget(block("Proxy setup", t), rect);
+    let inner = rect.inner(Margin::new(1, 1));
+    let parts = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Min(4),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    f.render_widget(
+        Paragraph::new(note)
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(t.muted)),
+        parts[0],
+    );
+    let toggle_style = if focus == 0 {
+        Style::default().bg(t.focus_background).fg(t.accent)
+    } else {
+        Style::default().fg(t.foreground)
+    };
+    f.render_widget(
+        Paragraph::new(format!(
+            "Use proxies   < {} >",
+            if enabled { "Yes" } else { "No" }
+        ))
+        .style(toggle_style),
+        parts[1],
+    );
+    app.actions.push((parts[1], Action::DialogField(0)));
+
+    let editor_style = if focus == 1 {
+        Style::default().bg(t.focus_background)
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        block(" Proxies ", t)
+            .border_style(Style::default().fg(if focus == 1 { t.accent } else { t.border }))
+            .style(editor_style),
+        parts[2],
+    );
+    let editor = parts[2].inner(Margin::new(1, 1));
+    let mut lines: Vec<Line> = wrap_proxy_lines(&text, editor.width as usize)
+        .into_iter()
+        .map(Line::raw)
+        .collect();
+    if text.trim().is_empty() {
+        lines.clear();
+        lines.push(Line::styled(
+            "Paste one proxy per line",
+            Style::default().fg(t.muted),
+        ));
+    }
+    let visible = editor.height.max(1) as usize;
+    let start = lines.len().saturating_sub(visible);
+    f.render_widget(
+        Paragraph::new(lines.into_iter().skip(start).collect::<Vec<_>>()),
+        editor,
+    );
+    app.actions.push((parts[2], Action::DialogField(1)));
+
+    let proxy = &app.snapshot["proxy"];
+    let summary = if !string(proxy, "error").is_empty() {
+        string(proxy, "error").to_owned()
+    } else if parts[3].width < 50 {
+        format!(
+            "{}R · {}A · {}D · {}B",
+            num(proxy, "ready"),
+            num(proxy, "assigned"),
+            num(proxy, "dead"),
+            num(proxy, "blocked")
+        )
+    } else {
+        format!(
+            "{} ready · {} assigned · {} dead · {} blocked",
+            num(proxy, "ready"),
+            num(proxy, "assigned"),
+            num(proxy, "dead"),
+            num(proxy, "blocked")
+        )
+    };
+    f.render_widget(
+        Paragraph::new(summary).style(Style::default().fg(t.muted)),
+        parts[3],
+    );
+
+    let bw = parts[4].width.min(25);
+    let buttons = Layout::horizontal([Constraint::Ratio(1, 2); 2])
+        .spacing(1)
+        .split(Rect::new(
+            parts[4].right() - bw,
+            parts[4].y,
+            bw,
+            parts[4].height,
+        ));
+    button(
+        f,
+        app,
+        buttons[0],
+        if saving { "Saving…" } else { "Save" },
+        Action::DialogSave,
+    );
+    button(f, app, buttons[1], "Cancel", Action::DialogCancel);
+}
+
 fn dialog(f: &mut Frame, app: &mut App, area: Rect) {
+    if app
+        .dialog
+        .as_ref()
+        .is_some_and(|dialog| dialog.kind == "proxies")
+    {
+        proxies_dialog(f, app, area);
+        return;
+    }
     let t = app.theme;
     let d = app.dialog.as_ref().unwrap();
     let confirmation = d.fields.is_empty();
@@ -2348,15 +2707,7 @@ fn interactive(mut app: App, rx: Option<mpsc::Receiver<String>>) -> Result<()> {
             match event::read()? {
                 Event::Key(key) => app.key(key),
                 Event::Paste(text) if app.pending_form.is_none() => {
-                    if let Some(d) = &mut app.dialog {
-                        if let Some(field) = d.fields.get_mut(d.focus) {
-                            if field.choices.is_empty() {
-                                for c in text.chars() {
-                                    field.input(c);
-                                }
-                            }
-                        }
-                    }
+                    app.paste(&text);
                 }
                 Event::Mouse(mouse) => {
                     if mouse.kind == MouseEventKind::ScrollDown {
@@ -2425,7 +2776,7 @@ fn demo_snapshot() -> Value {
         let taskdata=json!({"all":stats,"today":stats,"week":stats,"days":days,"recent":[1,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,0,1,1]});
         json!({"id":a["id"],"username":a["username"],"tasks":{"all":taskdata,"typing":taskdata,"math":taskdata,"emoji":taskdata},"runs":[{"username":a["username"],"task":a["task"],"recorded_challenges":correct+bad,"decided_submissions":correct+bad,"verdicts":{"correct":correct,"incorrect":bad},"earned_points_total":a["daily_points"],"started_at":"2026-10-18T03:00:00Z"}]})
     }).collect();
-    json!({"settings":{"theme":"keycash","resume_time":"08:00","network_retries":3,"retry_delay":5,"on_unknown":"stop","reduced_motion":false},"accounts":accounts,"events":["Preview: no live requests"],"history":histories})
+    json!({"settings":{"theme":"keycash","resume_time":"08:00","network_retries":3,"retry_delay":5,"on_unknown":"stop","reduced_motion":false,"proxy_enabled":true},"proxy":{"enabled":true,"total":3,"ready":1,"assigned":1,"dead":1,"blocked":0,"error":"","items":[{"endpoint":"proxy1.example.com:8000","status":"assigned","account_id":"0"},{"endpoint":"proxy2.example.com:8000","status":"ready","account_id":""},{"endpoint":"proxy3.example.com:8000","status":"dead","reason":"Proxy connection failed after 3 attempts","account_id":""}]},"accounts":accounts,"events":["Preview: no live requests"],"history":histories})
 }
 pub fn render_preview(args: &[String]) -> Result<()> {
     let value = |flag: &str, default: &str| {
@@ -2515,6 +2866,14 @@ pub fn render_preview(args: &[String]) -> Result<()> {
     if value("--dialog", "") == "settings" {
         app.settings_dialog();
     }
+    if value("--dialog", "") == "proxies" {
+        app.tab = 2;
+        app.proxy_dialog(
+            "proxy1.example.com:8000:user1:pass1\nproxy2.example.com:8000:user2:pass2\nproxy3.example.com:8000:user3:pass3\n"
+                .into(),
+            true,
+        );
+    }
     if value("--focus", "") == "save" {
         if let Some(d) = &mut app.dialog {
             d.focus = d.fields.len();
@@ -2596,6 +2955,133 @@ mod tests {
         assert_eq!(rows[1].spans[0].content, "Ready");
     }
 
+    #[test]
+    fn proxy_editor_accepts_large_bulk_paste_with_focus_fallback() {
+        let sample = "10.0.0.1:6001:user:pass1\n\
+10.0.0.2:6002:user:pass1\n\
+10.0.0.3:6003:user:pass1\n\
+10.0.0.4:6004:user:pass1\n\
+10.0.0.5:6005:user:pass1\n\
+10.0.0.6:6006:user:pass1\n\
+10.0.0.7:6007:user:pass1\n\
+10.0.0.8:6008:user:pass1\n\
+10.0.0.9:6009:user:pass1\n\
+10.0.0.10:6010:user:pass1";
+        let mut app = App::new(None, true);
+        app.proxy_dialog(String::new(), true);
+        app.action(Action::DialogField(0));
+        app.paste(sample);
+        let value = &app.dialog.as_ref().unwrap().fields[1].value;
+        assert!(value.starts_with("10.0.0.1:6001"));
+        assert!(value.ends_with("10.0.0.10:6010:user:pass1"));
+        assert_eq!(value.lines().count(), 10);
+
+        let mut crlf = App::new(None, true);
+        crlf.proxy_dialog(String::new(), true);
+        crlf.paste(&sample.replace('\n', "\r\n"));
+        let value = &crlf.dialog.as_ref().unwrap().fields[1].value;
+        assert_eq!(value.lines().count(), 10);
+        assert!(value.contains("\n10.0.0.2"));
+    }
+    #[test]
+    fn proxy_editor_wraps_long_lines_to_width() {
+        assert_eq!(
+            wrap_proxy_lines("proxy.example.com:8000:user:pass", 12),
+            vec!["proxy.exampl", "e.com:8000:u", "ser:pass"]
+        );
+        assert_eq!(wrap_proxy_lines("a\n\nb", 8), vec!["a", "", "b"]);
+    }
+    #[test]
+    fn proxy_settings_and_editor_render_on_phone_and_desktop() {
+        for (w, h) in [(42, 26), (80, 30)] {
+            let mut app = App::new(None, true);
+            app.tab = 2;
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| draw(f, &mut app)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("Proxy"));
+            assert!(text.contains("Proxies"));
+
+            app.proxy_dialog(
+                "proxy1.example.com:8000:user1:pass1\nproxy2.example.com:8000:user2:pass2\n".into(),
+                true,
+            );
+            terminal.draw(|f| draw(f, &mut app)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("Proxy setup"));
+            assert!(text.contains("Use proxies"));
+            assert!(text.contains("Proxies"));
+            assert!(!text.contains("╭proxy1.example.com"));
+            assert!(text.contains("Save"));
+            assert!(text.contains("Cancel"));
+        }
+    }
+    #[test]
+    fn proxy_editor_accepts_multiline_paste_and_saves_it() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = App::new(Some(tx), false);
+        app.proxy_dialog(String::new(), true);
+        app.action(Action::DialogField(1));
+        for c in
+            "proxy1.example.com:8000:user1:pass1\nproxy2.example.com:8000:user2:pass2\n".chars()
+        {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let text = &app.dialog.as_ref().unwrap().fields[1].value;
+        assert!(text.contains("proxy1.example.com"));
+        assert!(text.contains("proxy2.example.com"));
+        app.save_dialog();
+        let request: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(request["command"], "save_proxies");
+        assert_eq!(request["proxy_enabled"], true);
+        assert!(
+            request["proxy_text"]
+                .as_str()
+                .unwrap()
+                .contains("proxy2.example.com")
+        );
+    }
+    #[test]
+    fn proxy_dialog_clears_with_ctrl_u() {
+        let mut app = App::new(None, true);
+        app.proxy_dialog("one\ntwo\n".into(), true);
+        app.action(Action::DialogField(1));
+        app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(app.dialog.as_ref().unwrap().fields[1].value.is_empty());
+    }
+    #[test]
+    fn proxy_text_event_opens_the_editor() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = App::new(Some(tx), false);
+        app.request_proxy_dialog();
+        let request: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(request["command"], "proxy_config");
+        app.accept(
+            &json!({
+                "type":"proxy_text",
+                "id":request["id"],
+                "text":"proxy.example.com:8000:user:pass\n",
+                "enabled":true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let dialog = app.dialog.as_ref().unwrap();
+        assert_eq!(dialog.kind, "proxies");
+        assert!(dialog.fields[1].value.contains("proxy.example.com"));
+    }
     #[test]
     fn account_password_is_masked_in_render() {
         let mut app = App::new(None, true);
@@ -3096,7 +3582,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("Keycash Pro v1.1.0 by xnote12"));
+        assert!(text.contains("Keycash Pro v1.1.1 by xnote12"));
     }
 
     #[test]

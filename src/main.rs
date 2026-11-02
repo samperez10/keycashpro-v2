@@ -60,6 +60,7 @@ fn backend<'py>(py: Python<'py>, root: &Path) -> PyResult<Bound<'py, PyModule>> 
         .call1((include_str!("../keycash/__init__.py"), package.dict()))?;
     for (name, source) in [
         ("keycash.session", include_str!("../keycash/session.py")),
+        ("keycash.proxy", include_str!("../keycash/proxy.py")),
         ("keycash.client", include_str!("../keycash/client.py")),
         (
             "keycash.credentials",

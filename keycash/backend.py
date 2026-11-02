@@ -16,12 +16,17 @@ import time
 import httpx
 
 from . import engine
-from .client import AuthenticationError, KeycashClient
+from .client import AuthenticationError, KeycashClient, BASE_URL
 from .credentials import CredentialStore
 from .engine import Control, Job
 from .games import GameError, RateLimited, solve_math_problem
 from .locking import AccountBusy, account_lock as shared_account_lock
 from .pacing import DEFAULT_PACING, Pacer, validate_pacing
+from .proxy import (
+    ProxyChanged,
+    ProxyError,
+    ProxyPool,
+)
 from .session import SessionStore
 
 TASKS = {"typing": "Typing", "math": "Math", "emoji": "Emoji"}
@@ -36,6 +41,7 @@ DEFAULTS = {
     "on_unknown": "stop",
     "theme": "keycash",
     "reduced_motion": False,
+    "proxy_enabled": False,
 }
 MANILA = timezone(timedelta(hours=8), "Asia/Manila")
 UNKNOWN = ("unknown", "submission_outcome_unknown")
@@ -83,7 +89,7 @@ def number(value, name, minimum, maximum, integer=False):
 
 
 def friendly(exc):
-    if isinstance(exc, (UserError, AuthenticationError, GameError, AccountBusy)):
+    if isinstance(exc, (UserError, AuthenticationError, GameError, AccountBusy, ProxyError)):
         return str(exc)
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
         return "Keycash is rate limiting; try again in a few minutes"
@@ -106,6 +112,7 @@ class Service:
         self.data = Path(data)
         self.client_factory = client_factory
         self.data.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.proxies = ProxyPool(self.data)
         self.path = self.data / "keycash.sqlite3"
         self.db = sqlite3.connect(self.path)
         os.chmod(self.path, 0o600)
@@ -231,6 +238,8 @@ class Service:
             raise UserError("Resume time: use HH:MM, from 00:00 to 23:59 (Asia/Manila)")
         if settings["on_unknown"] not in ("stop", "continue"):
             raise UserError("Unknown handling must be stop or continue")
+        if not isinstance(settings.get("proxy_enabled"), bool):
+            raise UserError("Proxy mode must be on or off")
         if not re.fullmatch(r"[a-z0-9-]{1,40}", settings["theme"]):
             raise UserError("Invalid theme name")
 
@@ -242,6 +251,75 @@ class Service:
 
     def state_dir(self, account):
         return self.data / "accounts" / account["id"]
+
+    def proxy_enabled(self):
+        return bool(self.settings.get("proxy_enabled"))
+
+    def proxy_snapshot(self):
+        result = {
+            "enabled": self.proxy_enabled(),
+            "total": 0,
+            "ready": 0,
+            "assigned": 0,
+            "dead": 0,
+            "blocked": 0,
+            "error": "",
+            "items": [],
+        }
+        try:
+            rows = self.proxies.snapshot()
+        except ProxyError as exc:
+            result["error"] = str(exc)
+            return result
+        result["total"] = len(rows)
+        for row in rows:
+            status = row["status"]
+            if status in result:
+                result[status] += 1
+        result["items"] = rows
+        return result
+
+    def acquire_proxy(self, account):
+        return self.proxies.acquire(account["id"], self.proxy_enabled())
+
+    def client_for(self, account, proxy=None):
+        kwargs = {"proxy": proxy} if proxy is not None else {}
+        return self.client_factory(self.state_dir(account), **kwargs)
+
+    def note_proxy_failure(self, account, proxy, exc):
+        if proxy is None:
+            return
+        status = getattr(exc, "status", "ready")
+        reason = getattr(exc, "reason", str(exc))
+        try:
+            self.proxies.record(
+                proxy, status, reason, failure=status == "ready"
+            )
+        except ProxyError:
+            pass
+        self.event(
+            f"{account['username']}: proxy {proxy.endpoint} failed: {reason}"
+        )
+
+    def release_disabled_proxies(self):
+        for row in self.proxies.snapshot():
+            account_id = row.get("account_id")
+            if not account_id:
+                continue
+            known = next(
+                (a for a in self.accounts if a["id"] == account_id), None
+            )
+            if not known or not known["enabled"] or not self.proxy_enabled():
+                self.proxies.release(account_id)
+
+    async def proxy_retry_pause(self, control, seconds):
+        for _ in range(max(1, int(float(seconds) * 10))):
+            if control.stopped:
+                return False
+            while control.paused and not control.stopped:
+                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
+        return not control.stopped
 
     def credentials(self, account):
         return CredentialStore(self.state_dir(account))
@@ -485,6 +563,9 @@ class Service:
             state.setdefault("batch_size", CYCLE_SIZES[state.get("task", account["task"])])
             state.setdefault("activity", "")
             state.setdefault("verification_steps", 0)
+            state["proxy_endpoint"] = (
+                self.proxies.endpoint_for(uid) if self.proxy_enabled() else ""
+            )
             state["remaining"] = max(0, math.ceil(state.get("wait_until", 0) - time.time()))
             accounts.append(
                 {
@@ -503,6 +584,7 @@ class Service:
                 "accounts": accounts,
                 "history": self.history,
                 "events": self.logs,
+                "proxy": self.proxy_snapshot(),
                 "closing": self.closing,
             },
             ensure_ascii=True,
@@ -515,17 +597,32 @@ class Service:
         uid = account["id"]
         if self.is_active(uid) or uid in self.busy:
             raise UserError("Stop this account before changing its session")
+        password = password or self.password(account)
+        if not password:
+            raise UserError("Edit this account to save a password")
         self.busy.add(uid)
         self.snapshot()
+        attempts = 0
         try:
-            with account_lock(self.state_dir(account)):
-                async with self.client_factory(self.state_dir(account)) as client:
-                    password = password or self.password(account)
-                    if not password:
-                        raise UserError("Edit this account to save a password")
-                    profile = await client.login(account["username"], password)
-                    self.credentials(account).save(account["username"], password)
-                    self.cache_profile_balance(account, profile)
+            while True:
+                proxy = self.acquire_proxy(account)
+                try:
+                    with account_lock(self.state_dir(account)):
+                        async with self.client_for(account, proxy) as client:
+                            profile = await client.login(account["username"], password)
+                            self.credentials(account).save(account["username"], password)
+                            self.cache_profile_balance(account, profile)
+                    if proxy:
+                        self.proxies.success(proxy)
+                    break
+                except ProxyChanged as exc:
+                    self.note_proxy_failure(account, proxy, exc)
+                    attempts += 1
+                    if attempts > max(0, int(self.settings["network_retries"])):
+                        raise
+                    self.states[uid] = {"status": "Switching proxy"}
+                    self.snapshot()
+                    await asyncio.sleep(max(0.0, float(self.settings["retry_delay"])))
             self.states[uid] = {"status": "Session verified"}
             self.event(account["username"] + ": session verified")
         except Exception as exc:
@@ -542,16 +639,33 @@ class Service:
             raise UserError("Account is checking its login; try again shortly")
         self.busy.add(uid)
         self.snapshot()
+        attempts = 0
         try:
-            with account_lock(self.state_dir(account)):
-                async with self.client_factory(self.state_dir(account)) as client:
-                    profile = await client.restore(account["username"])
-                    if not profile:
-                        password = self.password(account)
-                        if not password:
-                            raise UserError("Edit this account to save a password")
-                        profile = await client.login(account["username"], password)
-                    self.cache_profile_balance(account, profile)
+            while True:
+                proxy = self.acquire_proxy(account)
+                try:
+                    with account_lock(self.state_dir(account)):
+                        async with self.client_for(account, proxy) as client:
+                            profile = await client.restore(account["username"])
+                            if not profile:
+                                password = self.password(account)
+                                if not password:
+                                    raise UserError(
+                                        "Edit this account to save a password"
+                                    )
+                                profile = await client.login(
+                                    account["username"], password
+                                )
+                            self.cache_profile_balance(account, profile)
+                    if proxy:
+                        self.proxies.success(proxy)
+                    break
+                except ProxyChanged as exc:
+                    self.note_proxy_failure(account, proxy, exc)
+                    attempts += 1
+                    if attempts > max(0, int(self.settings["network_retries"])):
+                        raise
+                    await asyncio.sleep(max(0.0, float(self.settings["retry_delay"])))
             return "Wallet refreshed"
         except Exception:
             self.balance_errors[uid] = "Wallet refresh unavailable"
@@ -593,6 +707,8 @@ class Service:
         else:
             self.accounts.append(account)
         self.save()
+        if not account["enabled"]:
+            self.proxies.release(uid)
         self.event(username + ": account saved")
         self.snapshot(True)
         self.emit({"type": "account_saved", "id": message.get("id"), "account_id": ident})
@@ -675,55 +791,85 @@ class Service:
     async def run_account(self, account, task, settings, control):
         uid = account["id"]
         state = self.states[uid]
-        run_id = now_utc().strftime("%Y%m%dT%H%M%S%fZ")
         try:
             while control.paused and not control.stopped:
                 await asyncio.sleep(0.2)
             if control.stopped:
                 state["status"] = "Stopped"
                 return
-            state["status"] = "Connecting"
-            self.snapshot()
-            with account_lock(self.state_dir(account)):
-                async with self.client_factory(self.state_dir(account)) as client:
-                    profile = await client.restore(account["username"])
+            attempts = 0
+            while True:
+                if control.stopped:
+                    state["status"] = "Stopped"
+                    return
+                run_id = now_utc().strftime("%Y%m%dT%H%M%S%fZ")
+                proxy = self.acquire_proxy(account)
+                try:
+                    state["status"] = "Connecting"
+                    self.snapshot()
+                    with account_lock(self.state_dir(account)):
+                        async with self.client_for(account, proxy) as client:
+                            profile = await client.restore(account["username"])
 
-                    async def reauthenticate():
-                        password = self.password(account)
-                        if not password:
-                            raise UserError("Session expired; edit this account to save a password")
-                        self.event(account["username"] + ": signing in again")
-                        self.cache_profile_balance(
-                            account, await client.login(account["username"], password)
-                        )
+                            async def reauthenticate():
+                                password = self.password(account)
+                                if not password:
+                                    raise UserError(
+                                        "Session expired; edit this account to save a password"
+                                    )
+                                self.event(account["username"] + ": signing in again")
+                                self.cache_profile_balance(
+                                    account,
+                                    await client.login(account["username"], password),
+                                )
 
-                    if profile:
-                        self.cache_profile_balance(account, profile)
-                    else:
-                        await reauthenticate()
-                    await engine.run(
-                        Job(
-                            client=client,
-                            game=task,
-                            control=control,
-                            pacer=Pacer(lambda: dict(self.settings)),
-                            reauthenticate=reauthenticate,
-                            should_continue=lambda: not self.progress(account)["target_reached"],
-                            on_row=lambda row: self.on_row(account, task, run_id, row),
-                            on_wait=lambda status, remaining: self.wait_status(
-                                account, control, status, remaining
-                            ),
-                            on_wallet=lambda amount: self.cache_balance(account, amount),
-                            log=lambda message: self.event(f"{account['username']}: {message}"),
-                            on_verification=lambda active, steps=0: self.verification_status(
-                                account, active, steps
-                            ),
-                            network_retries=settings["network_retries"],
-                            retry_delay=settings["retry_delay"],
-                            on_unknown=settings["on_unknown"],
-                        )
-                    )
-                    client.save()
+                            if profile:
+                                self.cache_profile_balance(account, profile)
+                            else:
+                                await reauthenticate()
+                            await engine.run(
+                                Job(
+                                    client=client,
+                                    game=task,
+                                    control=control,
+                                    pacer=Pacer(lambda: dict(self.settings)),
+                                    reauthenticate=reauthenticate,
+                                    should_continue=lambda: not self.progress(account)["target_reached"],
+                                    on_row=lambda row: self.on_row(
+                                        account, task, run_id, row
+                                    ),
+                                    on_wait=lambda status, remaining: self.wait_status(
+                                        account, control, status, remaining
+                                    ),
+                                    on_wallet=lambda amount: self.cache_balance(
+                                        account, amount
+                                    ),
+                                    log=lambda message: self.event(
+                                        f"{account['username']}: {message}"
+                                    ),
+                                    on_verification=lambda active, steps=0: self.verification_status(
+                                        account, active, steps
+                                    ),
+                                    network_retries=settings["network_retries"],
+                                    retry_delay=settings["retry_delay"],
+                                    on_unknown=settings["on_unknown"],
+                                )
+                            )
+                            client.save()
+                    if proxy:
+                        self.proxies.success(proxy)
+                    break
+                except ProxyChanged as exc:
+                    self.note_proxy_failure(account, proxy, exc)
+                    attempts += 1
+                    if attempts > max(0, int(settings["network_retries"])):
+                        raise
+                    state["status"] = "Switching proxy"
+                    self.snapshot()
+                    if not await self.proxy_retry_pause(
+                        control, settings["retry_delay"]
+                    ):
+                        return
             mode = self.schedule_mode(uid)
             if mode in ("stopped", "paused"):
                 state["status"] = "Paused" if mode == "paused" else "Stopped"
@@ -772,6 +918,13 @@ class Service:
         ]
         if not selected:
             raise UserError("No accounts are ready. Check saved logins and active runs")
+        if self.proxy_enabled():
+            try:
+                rows = self.proxies.snapshot()
+            except ProxyError as exc:
+                raise UserError(str(exc)) from None
+            if not any(row["status"] in ("ready", "assigned") for row in rows):
+                raise UserError("No available proxy; add or check proxies in Settings")
         for account in selected:
             uid = account["id"]
             self.set_schedule(uid, "running", "account")
@@ -834,6 +987,8 @@ class Service:
                 raise UserError("Stop this account before changing it")
             account["enabled"] = not account["enabled"]
             self.save()
+            if not account["enabled"]:
+                self.proxies.release(uid)
             return "Account updated"
         if command in ("remove", "logout"):
             account = self.account(uid)
@@ -848,11 +1003,56 @@ class Service:
             self.states.pop(uid, None)
             if command == "remove":
                 self.accounts.remove(account)
+                self.proxies.release(uid)
                 with self.db:
                     self.db.execute("DELETE FROM schedule WHERE account_id=?", (uid,))
                     self.db.execute("DELETE FROM balances WHERE account_id=?", (uid,))
             self.save()
             return "Account removed" if command == "remove" else "Local session cleared"
+        if command == "proxy_config":
+            self.emit(
+                {
+                    "type": "proxy_text",
+                    "id": message.get("id"),
+                    "text": self.proxies.text(),
+                    "enabled": self.proxy_enabled(),
+                }
+            )
+            return "Proxy settings loaded"
+        if command == "save_proxies":
+            enabled = message.get("proxy_enabled") is True
+            text = str(message.get("proxy_text", ""))
+            try:
+                count = self.proxies.save(text)
+            except (ValueError, OSError, ProxyError) as exc:
+                raise UserError(str(exc)) from None
+            self.settings["proxy_enabled"] = enabled
+            self.save()
+            if not enabled:
+                self.proxies.release_all()
+            else:
+                self.release_disabled_proxies()
+            self.snapshot(True)
+            return (
+                f"Saved {count} proxies; proxy mode "
+                + ("on" if enabled else "off")
+            )
+        if command == "check_proxies":
+            if not self.proxies.text().strip():
+                raise UserError("Add at least one proxy first")
+            try:
+                await self.proxies.check(BASE_URL)
+            except OSError as exc:
+                raise UserError(str(exc)) from None
+            summary = self.proxy_snapshot()
+            if summary["error"]:
+                raise UserError(summary["error"])
+            self.snapshot(True)
+            return (
+                f"Proxy check: {summary['ready']} ready, "
+                f"{summary['assigned']} assigned, "
+                f"{summary['dead']} dead, {summary['blocked']} blocked"
+            )
         if command == "settings":
             settings = dict(self.settings)
             settings.update(
@@ -861,6 +1061,10 @@ class Service:
             self.validate_settings(settings)
             self.settings = settings
             self.save()
+            if not self.proxy_enabled():
+                self.proxies.release_all()
+            else:
+                self.release_disabled_proxies()
             return "Settings saved; pacing changes apply at the next interval"
         if command == "start":
             await self.start(message)

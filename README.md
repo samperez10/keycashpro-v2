@@ -1,76 +1,60 @@
-# Keycash Solver
+# Keycash Pro
 
-Rust/Ratatui terminal application with its Python service modules embedded in the executable through PyO3. Account databases, sessions, and saved credentials remain external private data.
+**Keycash Pro v1.1.1 by xnote12**
 
-## Releases
+Terminal-based multi-account Keycash task solver for:
 
-GitHub Actions builds three packages after every push to `main`:
+- Typing tasks
+- Math tasks
+- Emoji tasks
+- Multiple accounts with separate proxy assignments
 
-- `keycash-solver-alpine-x86_64.tar.gz` — native Alpine/musl executable and installer.
-- `KeycashSolver-Portable-x86_64.exe` — single-file portable Windows app with its Python 3.12 runtime embedded.
-- `keycash-solver-termux-aarch64.tar.gz` — native Android/Termux ARM64 executable with bundled Python packages.
+## Sneak peek
 
-Tagged pushes such as `v1.1.0` also publish all packages to a GitHub Release. Ordinary pushes rebuild and self-test all platforms without publishing downloads.
+<img src="assets/keycash-sneak-peek.jpg" alt="Keycash Pro running in Termux" width="480">
 
-## Alpine installation
+## Multi-account proxy support
 
-For a public repository, install the latest release directly:
+Open **Settings → Proxies** or press `p` on the Settings tab. Add one HTTP proxy per line:
 
-```sh
-curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
-sh install-keycash.sh
+```text
+host:port:username:password
 ```
 
-Extract the archive on a matching x86_64 Alpine system, then run:
+Each enabled account receives its own persistent proxy. Use at least as many proxies as simultaneously active accounts. A failing proxy is replaced after three connection failures, while a Cloudflare-blocked proxy is replaced immediately. Use **Check** to test the saved proxy list against the Keycash login page.
 
-```sh
-tar -xzf keycash-solver-alpine-x86_64.tar.gz
-cd keycash-solver-alpine-x86_64
-sh install.sh --detect
-sh install.sh
-~/.local/bin/keycash
-```
+Proxy credentials are stored in the private application data directory and are excluded from interface snapshots and logs.
 
-The installer verifies package checksums and runs an offline embedded-Python self-test before installation. A root installation can add missing runtime packages automatically. Non-root users should install `python3`, `py3-httpx`, `py3-beautifulsoup4`, and `ca-certificates` first.
+## Termux installation
 
-Application files are installed under `~/.local/lib/keycash-solver`; private data is kept separately under `~/.local/share/keycash-solver` and is preserved during updates. Use `--prefix DIR` to choose another prefix.
-
-## Android / Termux installation
-
-On a 64-bit ARM Android device, run the same bootstrap command inside Termux:
+Supported platform: ARM64 Android using Termux.
 
 ```sh
 pkg install -y curl
 curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
-sh install-keycash.sh
+bash install-keycash.sh
+keycash
 ```
 
-The script automatically selects the Termux build, verifies both release checksums and the package manifest, installs Python if necessary, and exposes the portable command as `keycash`. Application code is installed under `$PREFIX/lib/keycash-solver`; private data stays under `~/.local/share/keycash-solver` and is preserved across upgrades.
+## Alpine Linux installation
+
+Supported platform: Alpine Linux x86_64.
+
+```sh
+curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
+bash install-keycash.sh
+keycash
+```
+
+If `keycash` is not immediately found after a non-root installation:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+keycash
+```
 
 ## Windows portable executable
 
-Download and run `KeycashSolver-Portable-x86_64.exe`. No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The EXE contains the Rust app, Python runtime, and third-party packages.
+[Download KeycashSolver-Portable-x86_64.exe](https://github.com/samperez10/keycashpro-v2/releases/latest/download/KeycashSolver-Portable-x86_64.exe)
 
-The Windows launcher opens a fixed 72-column × 36-row compact semi-square console, giving the interface more horizontal room while disabling classic-console resize and maximize controls.
-
-On first launch it automatically expands an internal versioned runtime cache under `%LOCALAPPDATA%\KeycashSolver\portable-runtime`; this is an implementation detail and requires no setup. Portable accounts and settings are stored beside the downloaded EXE in `KeycashSolver-data`, so move that folder with the EXE when transferring the app. Each GitHub build runs the final one-file EXE and its offline self-test on Windows.
-
-## Development
-
-Python 3.12+ with `httpx` and `beautifulsoup4`, Rust 1.88+, and the Python development library are required.
-
-```sh
-python -m pip install -r requirements.txt
-python -m unittest discover -s tests -q
-PYO3_PYTHON=$(command -v python) cargo test --locked
-sh scripts/build.sh
-```
-
-For Alpine, build inside Alpine:
-
-```sh
-apk add build-base cargo rust python3-dev python3 py3-httpx py3-beautifulsoup4 ca-certificates binutils
-sh scripts/build_alpine.sh
-```
-
-No application Python source is included as loose files in any release package. The source is compiled into the Rust executable with `include_str!`. Windows embeds its Python runtime and dependencies in the portable EXE. Alpine uses its system Python packages. The Termux archive bundles pure-Python dependencies and uses Termux's Python runtime.
+No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The window uses a fixed, non-resizable 72 × 36 compact layout.

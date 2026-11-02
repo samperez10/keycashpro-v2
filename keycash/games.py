@@ -13,6 +13,8 @@ from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup
 
+from .proxy import ProxyChanged, cloudflare_challenge
+
 
 class GameError(RuntimeError):
     pass
@@ -455,12 +457,36 @@ class GameRunner:
                     "Accept": "application/json",
                 },
             )
+        except httpx.ProxyError as exc:
+            if submission:
+                raise SubmissionOutcomeUnknown(
+                    "Submission response was lost; the answer will not be replayed"
+                ) from exc
+            raise ProxyChanged("Proxy connection failed") from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if getattr(self.client, "proxy", None) is not None:
+                if submission:
+                    raise SubmissionOutcomeUnknown(
+                        "Submission response was lost; the answer will not be replayed"
+                    ) from exc
+                raise ProxyChanged("Proxy connection failed") from exc
+            if submission:
+                raise SubmissionOutcomeUnknown(
+                    "Submission response was lost; the answer will not be replayed"
+                ) from exc
+            raise TransientGameError("Game request failed before a usable response") from exc
         except httpx.RequestError as exc:
             if submission:
                 raise SubmissionOutcomeUnknown(
                     "Submission response was lost; the answer will not be replayed"
                 ) from exc
             raise TransientGameError("Game request failed before a usable response") from exc
+        if getattr(self.client, "proxy", None) is not None and cloudflare_challenge(response):
+            raise ProxyChanged(
+                "Proxy blocked by Cloudflare",
+                status="blocked",
+                reason="Cloudflare challenge detected",
+            )
         if response.is_redirect or response.status_code in (401, 403):
             raise SessionExpired("Game request needs a fresh login and ticket")
         if response.status_code == 429:
@@ -567,7 +593,21 @@ class GameRunner:
                     "Server rate limit (HTTP 429)",
                     _seconds(response.headers.get("retry-after")),
                 )
+            if getattr(self.client, "proxy", None) is not None and cloudflare_challenge(
+                response
+            ):
+                raise ProxyChanged(
+                    "Proxy blocked by Cloudflare",
+                    status="blocked",
+                    reason="Cloudflare challenge detected",
+                )
             response.raise_for_status()
+        except httpx.ProxyError as exc:
+            raise ProxyChanged("Proxy connection failed") from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if getattr(self.client, "proxy", None) is not None:
+                raise ProxyChanged("Proxy connection failed") from exc
+            raise TransientGameError("Game page could not be loaded") from exc
         except httpx.HTTPError as exc:
             raise TransientGameError("Game page could not be loaded") from exc
         if self.client.is_login(response.url) or self.client.has_login_form(response.text):
