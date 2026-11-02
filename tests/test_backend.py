@@ -230,11 +230,13 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             db.commit()
             db.close()
             service = Service(Bridge(), data, data)
-            self.addCleanup(service.db.close)
-            columns = {
-                row[1] for row in service.db.execute("PRAGMA table_info(outcomes)")
-            }
-            self.assertIn("answer", columns)
+            try:
+                columns = {
+                    row[1] for row in service.db.execute("PRAGMA table_info(outcomes)")
+                }
+                self.assertIn("answer", columns)
+            finally:
+                service.db.close()
 
 
 if __name__ == "__main__":

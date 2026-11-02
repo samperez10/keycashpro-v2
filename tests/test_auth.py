@@ -1,3 +1,4 @@
+import os
 import stat
 import tempfile
 import unittest
@@ -59,7 +60,8 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(profile["authenticated"])
             fingerprint = client.fingerprint
             path = client.store.path
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertNotIn("test-password", path.read_text())
         async with self.client() as client:
             profile = await client.ensure_session("tester")

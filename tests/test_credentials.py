@@ -1,3 +1,4 @@
+import os
 import stat
 import tempfile
 import unittest
@@ -13,7 +14,8 @@ class CredentialTests(unittest.TestCase):
     def test_verified_password_storage_is_private_and_account_bound(self):
         self.store.save("tester", "test-password")
         self.assertEqual(self.store.load("tester"), "test-password")
-        self.assertEqual(stat.S_IMODE(self.store.path.stat().st_mode), 0o600)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(self.store.path.stat().st_mode), 0o600)
         with self.assertRaises(RuntimeError):
             self.store.load("someone-else")
 
