@@ -5,16 +5,22 @@ umask 077
 REPOSITORY=${KEYCASH_REPOSITORY:-samperez10/keycashpro-v2}
 BASE="https://github.com/$REPOSITORY/releases/latest/download"
 
-[ -r /etc/alpine-release ] || { echo "This installer requires Alpine Linux." >&2; exit 1; }
-for command in curl tar sha256sum apk; do
+if [ "${PREFIX:-}" = "/data/data/com.termux/files/usr" ]; then
+    PLATFORM=termux
+    ARCH=$(uname -m)
+    [ "$ARCH" = "aarch64" ] || { echo "No Keycash release is available for Termux $ARCH." >&2; exit 1; }
+elif [ -r /etc/alpine-release ]; then
+    PLATFORM=alpine
+    command -v apk >/dev/null 2>&1 || { echo "Missing required command: apk" >&2; exit 1; }
+    ARCH=$(apk --print-arch)
+    [ "$ARCH" = "x86_64" ] || { echo "No Keycash release is available for Alpine $ARCH." >&2; exit 1; }
+else
+    echo "This installer supports ARM64 Termux and x86_64 Alpine Linux." >&2
+    exit 1
+fi
+for command in curl tar sha256sum; do
     command -v "$command" >/dev/null 2>&1 || { echo "Missing required command: $command" >&2; exit 1; }
 done
-ARCH=$(apk --print-arch)
-case "$ARCH" in
-    x86_64) ;;
-    *) echo "No Keycash release is available for Alpine $ARCH." >&2; exit 1 ;;
-esac
-
 download() {
     url=$1
     destination=$2
@@ -28,11 +34,11 @@ download() {
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/keycash-install.XXXXXX")
 cleanup() { rm -rf -- "$WORK"; }
 trap cleanup EXIT HUP INT TERM
-NAME="keycash-solver-alpine-$ARCH.tar.gz"
-echo "Downloading Keycash Solver for Alpine $ARCH..."
+NAME="keycash-solver-$PLATFORM-$ARCH.tar.gz"
+echo "Downloading Keycash Solver for $PLATFORM $ARCH..."
 download "$BASE/$NAME" "$WORK/$NAME"
 download "$BASE/$NAME.sha256" "$WORK/$NAME.sha256"
 (cd "$WORK" && sha256sum -c "$NAME.sha256")
 tar -xzf "$WORK/$NAME" -C "$WORK"
 echo "Archive verified. Starting installer..."
-sh "$WORK/keycash-solver-alpine-$ARCH/install.sh" "$@"
+sh "$WORK/keycash-solver-$PLATFORM-$ARCH/install.sh" "$@"

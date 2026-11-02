@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -20,11 +21,15 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def assemble(output, binary, system, architecture):
+def assemble(output, binary, system, architecture, python_deps=None):
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+    environment = os.environ.copy()
+    if python_deps:
+        environment["PYTHONPATH"] = str(python_deps.resolve())
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
         [str(binary), "--root", str(ROOT), "--self-test"],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, env=environment,
     )
     check = json.loads(result.stdout)
     if check.get("embedded_python") != "ok" or check.get("network_calls") != 0:
@@ -33,20 +38,29 @@ def assemble(output, binary, system, architecture):
     target = output / "keycash-solver"
     shutil.copy2(binary, target)
     target.chmod(0o755)
-    shutil.copy2(ROOT / "scripts/install_alpine.sh", output / "install.sh")
+    installer = "install_termux.sh" if system == "termux" else "install_alpine.sh"
+    shutil.copy2(ROOT / "scripts" / installer, output / "install.sh")
     (output / "install.sh").chmod(0o755)
+    if python_deps:
+        shutil.copytree(
+            python_deps,
+            output / "python",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
     build = {
         "name": "keycash-solver", "version": version, "author": "xnote12", "platform": system,
         "architecture": architecture,
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
         "python_soabi": sysconfig.get_config_var("SOABI"),
-        "python_source": "embedded", "entrypoint": "keycash-solver",
+        "python_source": "embedded",
+        "python_dependencies": "bundled" if python_deps else "system",
+        "entrypoint": "keycash-solver",
     }
     (output / "build.json").write_text(json.dumps(build, indent=2) + "\n")
     rows = []
-    for path in sorted(output.iterdir()):
+    for path in sorted(output.rglob("*")):
         if path.is_file() and path.name != "SHA256SUMS":
-            rows.append(f"{digest(path)}  {path.name}")
+            rows.append(f"{digest(path)}  {path.relative_to(output).as_posix()}")
     (output / "SHA256SUMS").write_text("\n".join(rows) + "\n")
 
 
@@ -60,7 +74,10 @@ def package(args):
         raise RuntimeError(f"release already exists: {name}")
     with tempfile.TemporaryDirectory(prefix=".keycash-package-", dir=dist) as temporary:
         staged = Path(temporary) / name
-        assemble(staged, args.binary.resolve(), args.platform, args.architecture)
+        assemble(
+            staged, args.binary.resolve(), args.platform, args.architecture,
+            args.python_deps,
+        )
         if args.archive:
             with tarfile.open(Path(temporary) / archive.name, "w:gz") as bundle:
                 bundle.add(staged, arcname=name)
@@ -79,5 +96,6 @@ if __name__ == "__main__":
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--platform", required=True)
     parser.add_argument("--architecture", required=True)
+    parser.add_argument("--python-deps", type=Path)
     parser.add_argument("--archive", action="store_true")
     package(parser.parse_args())

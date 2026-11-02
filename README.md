@@ -4,12 +4,13 @@ Rust/Ratatui terminal application with its Python service modules embedded in th
 
 ## Releases
 
-GitHub Actions builds two packages after every push to `main`:
+GitHub Actions builds three packages after every push to `main`:
 
 - `keycash-solver-alpine-x86_64.tar.gz` — native Alpine/musl executable and installer.
 - `KeycashSolver-Portable-x86_64.exe` — single-file portable Windows app with its Python 3.12 runtime embedded.
+- `keycash-solver-termux-aarch64.tar.gz` — native Android/Termux ARM64 executable with bundled Python packages.
 
-Tagged pushes such as `v1.1.0` also publish both packages to a GitHub Release. Ordinary pushes rebuild and self-test both platforms without publishing downloads.
+Tagged pushes such as `v1.1.0` also publish all packages to a GitHub Release. Ordinary pushes rebuild and self-test all platforms without publishing downloads.
 
 ## Alpine installation
 
@@ -33,6 +34,18 @@ sh install.sh
 The installer verifies package checksums and runs an offline embedded-Python self-test before installation. A root installation can add missing runtime packages automatically. Non-root users should install `python3`, `py3-httpx`, `py3-beautifulsoup4`, and `ca-certificates` first.
 
 Application files are installed under `~/.local/lib/keycash-solver`; private data is kept separately under `~/.local/share/keycash-solver` and is preserved during updates. Use `--prefix DIR` to choose another prefix.
+
+## Android / Termux installation
+
+On a 64-bit ARM Android device, run the same bootstrap command inside Termux:
+
+```sh
+pkg install -y curl
+curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
+sh install-keycash.sh
+```
+
+The script automatically selects the Termux build, verifies both release checksums and the package manifest, installs Python if necessary, and exposes the portable command as `keycash`. Application code is installed under `$PREFIX/lib/keycash-solver`; private data stays under `~/.local/share/keycash-solver` and is preserved across upgrades.
 
 ## Windows portable executable
 
@@ -60,4 +73,4 @@ apk add build-base cargo rust python3-dev python3 py3-httpx py3-beautifulsoup4 c
 sh scripts/build_alpine.sh
 ```
 
-No application Python source is included as loose files in either release package. The source is compiled into the Rust executable with `include_str!`. Windows embeds its Python runtime and dependencies in the portable EXE; Alpine uses its system Python packages.
+No application Python source is included as loose files in any release package. The source is compiled into the Rust executable with `include_str!`. Windows embeds its Python runtime and dependencies in the portable EXE. Alpine uses its system Python packages. The Termux archive bundles pure-Python dependencies and uses Termux's Python runtime.

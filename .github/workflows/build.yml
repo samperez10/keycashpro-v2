@@ -89,10 +89,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload $env:GITHUB_REF_NAME dist/KeycashSolver-Portable-x86_64.exe dist/KeycashSolver-Portable-x86_64.exe.sha256 --repo $env:GITHUB_REPOSITORY --clobber
 
+  termux:
+    runs-on: ubuntu-latest
+    needs: [test, prepare_release]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - name: Build and package in ARM64 Termux
+        run: |
+          mkdir -p dist
+          chmod 777 dist
+          docker run --rm --platform linux/arm64 --security-opt seccomp=unconfined -v "$GITHUB_WORKSPACE:/source:ro" -v "$GITHUB_WORKSPACE/dist:/output" termux/termux-docker:aarch64 bash -lc '
+            pkg update -y
+            pkg install -y rust python python-pip clang make pkg-config binutils
+            cp -R /source "$HOME/keycash"
+            cd "$HOME/keycash"
+            sh scripts/build_termux.sh
+            cp dist/keycash-solver-termux-aarch64.tar.gz* /output/
+          '
+      - name: Upload Termux files to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/keycash-solver-termux-aarch64.tar.gz dist/keycash-solver-termux-aarch64.tar.gz.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [alpine, windows]
+    needs: [alpine, windows, termux]
     steps:
       - name: Publish GitHub release
         env:

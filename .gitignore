@@ -1,6 +1,7 @@
 .state/
 .venv/
 target/
+build/
 dist/
 __pycache__/
 *.py[cod]
