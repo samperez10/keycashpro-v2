@@ -1,6 +1,6 @@
 # Keycash Pro
 
-**Keycash Pro v1.1.3 by xnote12**
+**Keycash Pro v1.1.4 by xnote12**
 
 Terminal-based multi-account Keycash task solver for:
 
@@ -57,4 +57,4 @@ keycash
 
 [Download KeycashSolver-Portable-x86_64.exe](https://github.com/samperez10/keycashpro-v2/releases/latest/download/KeycashSolver-Portable-x86_64.exe)
 
-No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The launcher resizes both the terminal grid and the outer Windows Terminal window to a fixed compact layout.
+No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The launcher keeps the outer Windows Terminal window in a fixed compact portrait layout while allowing the terminal to report its real visible rows.

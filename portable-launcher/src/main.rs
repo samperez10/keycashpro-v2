@@ -14,8 +14,7 @@ const PAYLOAD_ID: &str = env!("KEYCASH_PAYLOAD_ID");
 fn configure_compact_console() {
     use std::sync::atomic::{AtomicIsize, Ordering};
     use windows_sys::Win32::System::Console::{
-        COORD, GetConsoleWindow, GetStdHandle, SMALL_RECT, STD_OUTPUT_HANDLE,
-        SetConsoleScreenBufferSize, SetConsoleTitleW, SetConsoleWindowInfo,
+        GetConsoleWindow, SetConsoleTitleW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DeleteMenu, DrawMenuBar, GWL_STYLE, GetForegroundWindow, GetSystemMenu,
@@ -23,8 +22,6 @@ fn configure_compact_console() {
         SWP_NOMOVE, SWP_NOZORDER, SetWindowLongW, SetWindowPos, WS_MAXIMIZEBOX, WS_SIZEBOX,
     };
 
-    const WIDTH: i16 = 72;
-    const HEIGHT: i16 = 36;
     const WINDOW_WIDTH: i32 = 730;
     const WINDOW_HEIGHT: i32 = 710;
     static TERMINAL_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -33,29 +30,6 @@ fn configure_compact_console() {
         .collect();
     unsafe {
         SetConsoleTitleW(title.as_ptr());
-        let output = GetStdHandle(STD_OUTPUT_HANDLE);
-        let tiny = SMALL_RECT {
-            Left: 0,
-            Top: 0,
-            Right: 0,
-            Bottom: 0,
-        };
-        SetConsoleWindowInfo(output, 1, &tiny);
-        SetConsoleScreenBufferSize(
-            output,
-            COORD {
-                X: WIDTH,
-                Y: HEIGHT,
-            },
-        );
-        let compact = SMALL_RECT {
-            Left: 0,
-            Top: 0,
-            Right: WIDTH - 1,
-            Bottom: HEIGHT - 1,
-        };
-        SetConsoleWindowInfo(output, 1, &compact);
-
         let console = GetConsoleWindow();
         let foreground = GetForegroundWindow();
         if TERMINAL_WINDOW.load(Ordering::Relaxed) == 0 && !foreground.is_null() {
