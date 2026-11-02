@@ -3582,7 +3582,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("Keycash Pro v1.1.2 by xnote12"));
+        assert!(text.contains("Keycash Pro v1.1.3 by xnote12"));
     }
 
     #[test]

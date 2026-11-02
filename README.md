@@ -1,6 +1,6 @@
 # Keycash Pro
 
-**Keycash Pro v1.1.2 by xnote12**
+**Keycash Pro v1.1.3 by xnote12**
 
 Terminal-based multi-account Keycash task solver for:
 

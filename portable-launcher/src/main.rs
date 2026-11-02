@@ -25,8 +25,8 @@ fn configure_compact_console() {
 
     const WIDTH: i16 = 72;
     const HEIGHT: i16 = 36;
-    const WINDOW_WIDTH: i32 = 700;
-    const WINDOW_HEIGHT: i32 = 650;
+    const WINDOW_WIDTH: i32 = 730;
+    const WINDOW_HEIGHT: i32 = 710;
     static TERMINAL_WINDOW: AtomicIsize = AtomicIsize::new(0);
     let title: Vec<u16> = format!("Keycash Pro v{} by xnote12\0", env!("CARGO_PKG_VERSION"))
         .encode_utf16()
