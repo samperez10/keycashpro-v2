@@ -51,7 +51,7 @@ The script automatically selects the Termux build, verifies both release checksu
 
 Download and run `KeycashSolver-Portable-x86_64.exe`. No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The EXE contains the Rust app, Python runtime, and third-party packages.
 
-The Windows launcher opens a fixed 48-column × 32-row portrait console and disables classic-console resize and maximize controls.
+The Windows launcher opens a fixed 72-column × 36-row compact semi-square console, giving the interface more horizontal room while disabling classic-console resize and maximize controls.
 
 On first launch it automatically expands an internal versioned runtime cache under `%LOCALAPPDATA%\KeycashSolver\portable-runtime`; this is an implementation detail and requires no setup. Portable accounts and settings are stored beside the downloaded EXE in `KeycashSolver-data`, so move that folder with the EXE when transferring the app. Each GitHub build runs the final one-file EXE and its offline self-test on Windows.
 

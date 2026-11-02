@@ -11,7 +11,7 @@ const PAYLOAD: &[u8] = include_bytes!(env!("KEYCASH_PORTABLE_PAYLOAD"));
 const PAYLOAD_ID: &str = env!("KEYCASH_PAYLOAD_ID");
 
 #[cfg(windows)]
-fn configure_portrait_console() {
+fn configure_compact_console() {
     use windows_sys::Win32::System::Console::{
         COORD, GetConsoleWindow, GetStdHandle, SMALL_RECT, STD_OUTPUT_HANDLE,
         SetConsoleScreenBufferSize, SetConsoleTitleW, SetConsoleWindowInfo,
@@ -21,8 +21,8 @@ fn configure_portrait_console() {
         SC_MAXIMIZE, SC_SIZE, SetWindowLongW, WS_MAXIMIZEBOX, WS_SIZEBOX,
     };
 
-    const WIDTH: i16 = 48;
-    const HEIGHT: i16 = 32;
+    const WIDTH: i16 = 72;
+    const HEIGHT: i16 = 36;
     let title: Vec<u16> = format!("Keycash Pro v{} by xnote12\0", env!("CARGO_PKG_VERSION"))
         .encode_utf16()
         .collect();
@@ -43,13 +43,13 @@ fn configure_portrait_console() {
                 Y: HEIGHT,
             },
         );
-        let portrait = SMALL_RECT {
+        let compact = SMALL_RECT {
             Left: 0,
             Top: 0,
             Right: WIDTH - 1,
             Bottom: HEIGHT - 1,
         };
-        SetConsoleWindowInfo(output, 1, &portrait);
+        SetConsoleWindowInfo(output, 1, &compact);
 
         let window = GetConsoleWindow();
         if !window.is_null() {
@@ -70,7 +70,7 @@ fn configure_portrait_console() {
 }
 
 #[cfg(not(windows))]
-fn configure_portrait_console() {}
+fn configure_compact_console() {}
 
 fn runtime_base() -> PathBuf {
     env::var_os("LOCALAPPDATA")
@@ -169,13 +169,13 @@ fn run() -> Result<i32, String> {
         {
             return Ok(status.code().unwrap_or(1));
         }
-        configure_portrait_console();
+        configure_compact_console();
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
 
 fn main() -> ExitCode {
-    configure_portrait_console();
+    configure_compact_console();
     match run() {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(error) => {
