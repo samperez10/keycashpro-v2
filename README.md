@@ -7,7 +7,7 @@ Rust/Ratatui terminal application with its Python service modules embedded in th
 GitHub Actions builds two packages after every push to `main`:
 
 - `keycash-solver-alpine-x86_64.tar.gz` — native Alpine/musl executable and installer.
-- `keycash-solver-windows-x86_64.zip` — portable Windows executable with a private Python 3.12 runtime.
+- `KeycashSolver-Portable-x86_64.exe` — single-file portable Windows app with its Python 3.12 runtime embedded.
 
 Tagged pushes such as `v0.1.0` also publish both packages to a GitHub Release. Ordinary pushes retain them as workflow artifacts.
 
@@ -27,16 +27,11 @@ The installer verifies package checksums and runs an offline embedded-Python sel
 
 Application files are installed under `~/.local/lib/keycash-solver`; private data is kept separately under `~/.local/share/keycash-solver` and is preserved during updates. Use `--prefix DIR` to choose another prefix.
 
-## Windows portable package
+## Windows portable executable
 
-Extract the entire ZIP. Run `keycash-solver.exe` for portable use, or run this from PowerShell:
+Download and run `KeycashSolver-Portable-x86_64.exe`. No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The EXE contains the Rust app, Python runtime, and third-party packages.
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1
-```
-
-The installer copies the complete runtime to `%LOCALAPPDATA%\Programs\KeycashSolver`, preserves `.state`, verifies the executable, and creates a Start-menu shortcut. The Windows build is produced and self-tested by GitHub Actions, but should remain marked experimental until exercised on a real Windows terminal.
+On first launch it automatically expands an internal versioned runtime cache under `%LOCALAPPDATA%\KeycashSolver\portable-runtime`; this is an implementation detail and requires no setup. Portable accounts and settings are stored beside the downloaded EXE in `KeycashSolver-data`, so move that folder with the EXE when transferring the app. Each GitHub build runs the final one-file EXE and its offline self-test on Windows.
 
 ## Development
 

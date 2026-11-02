@@ -1,0 +1,14 @@
+[package]
+name = "keycash-portable"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[profile.release]
+strip = "symbols"
+debug = false
+lto = "thin"
+codegen-units = 1

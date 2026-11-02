@@ -70,15 +70,15 @@ jobs:
           $env:PYO3_PYTHON = (Get-Command python).Source
           cargo test --locked
           cargo build --release --locked
-      - name: Create self-contained portable package
+      - name: Create single-file portable executable
         shell: pwsh
         run: ./scripts/package_windows.ps1 -Binary ./target/release/keycash-solver.exe
       - uses: actions/upload-artifact@v7
         with:
-          name: keycash-solver-windows-x86_64
+          name: KeycashSolver-Portable-x86_64
           path: |
-            dist/keycash-solver-windows-x86_64.zip
-            dist/keycash-solver-windows-x86_64.zip.sha256
+            dist/KeycashSolver-Portable-x86_64.exe
+            dist/KeycashSolver-Portable-x86_64.exe.sha256
           if-no-files-found: error
 
   release:

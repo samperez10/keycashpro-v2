@@ -16,7 +16,6 @@ Expand-Archive $embed -DestinationPath (Join-Path $package "runtime")
 python -m pip install --disable-pip-version-check --no-compile --target (Join-Path $package "runtime\Lib\site-packages") -r (Join-Path $root "requirements.txt")
 Copy-Item (Join-Path $package "runtime\python312.dll") $package
 Copy-Item (Join-Path $package "runtime\python3.dll") $package
-Copy-Item (Join-Path $root "scripts\install_windows.ps1") (Join-Path $package "install.ps1")
 $cargo = Get-Content (Join-Path $root "Cargo.toml") -Raw
 $version = [regex]::Match($cargo, "(?m)^version = `"([^`"]+)`"").Groups[1].Value
 $build = [ordered]@{
@@ -34,8 +33,18 @@ $hashes = Get-ChildItem $package -Recurse -File | ForEach-Object {
     [ordered]@{ path = $_.FullName.Substring($package.Length + 1); sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() }
 }
 $hashes | ConvertTo-Json | Set-Content (Join-Path $package "SHA256SUMS.json") -Encoding utf8NoBOM
-$archive = "$package.zip"
-Compress-Archive -Path $package -DestinationPath $archive
-$archiveHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-Set-Content "$archive.sha256" "$archiveHash  $(Split-Path $archive -Leaf)" -Encoding ascii
-Write-Host "Created $archive"
+$payload = Join-Path $env:RUNNER_TEMP "keycash-portable-payload.zip"
+Compress-Archive -Path (Join-Path $package "*") -DestinationPath $payload
+$env:KEYCASH_PORTABLE_PAYLOAD = $payload
+$env:KEYCASH_PAYLOAD_ID = (Get-FileHash $payload -Algorithm SHA256).Hash.Substring(0, 16).ToLower()
+cargo build --release --locked --manifest-path (Join-Path $root "portable-launcher\Cargo.toml")
+if ($LASTEXITCODE -ne 0) { throw "Portable launcher compilation failed." }
+$portable = Join-Path $dist "KeycashSolver-Portable-x86_64.exe"
+Copy-Item (Join-Path $root "portable-launcher\target\release\keycash-portable.exe") $portable
+$portableCheck = & $portable --self-test | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $portableCheck.embedded_python -ne "ok" -or $portableCheck.network_calls -ne 0) {
+    throw "Single-file portable executable failed its offline self-test."
+}
+$portableHash = (Get-FileHash $portable -Algorithm SHA256).Hash.ToLower()
+Set-Content "$portable.sha256" "$portableHash  $(Split-Path $portable -Leaf)" -Encoding ascii
+Write-Host "Created $portable"
