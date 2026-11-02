@@ -33,26 +33,34 @@ jobs:
           cargo build --release --locked
           ./target/release/keycash-solver --root "$GITHUB_WORKSPACE" --self-test
 
-  alpine:
+  prepare_release:
     runs-on: ubuntu-latest
     needs: test
+    steps:
+      - name: Create draft release for a tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --generate-notes --verify-tag
+
+  alpine:
+    runs-on: ubuntu-latest
+    needs: [test, prepare_release]
     steps:
       - uses: actions/checkout@v7
       - name: Build and package in Alpine
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work alpine:3.23 sh -c 'apk add --no-cache build-base cargo rust python3-dev python3 py3-httpx py3-beautifulsoup4 ca-certificates binutils && sh scripts/build_alpine.sh'
           sudo chown -R "$(id -u):$(id -g)" dist target/alpine-*
-      - uses: actions/upload-artifact@v7
-        with:
-          name: keycash-solver-alpine-x86_64
-          path: |
-            dist/keycash-solver-alpine-x86_64.tar.gz
-            dist/keycash-solver-alpine-x86_64.tar.gz.sha256
-          if-no-files-found: error
+      - name: Upload Alpine files to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/keycash-solver-alpine-x86_64.tar.gz dist/keycash-solver-alpine-x86_64.tar.gz.sha256 --repo "$GITHUB_REPOSITORY" --clobber
 
   windows:
     runs-on: windows-latest
-    needs: test
+    needs: [test, prepare_release]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -73,24 +81,19 @@ jobs:
       - name: Create single-file portable executable
         shell: pwsh
         run: ./scripts/package_windows.ps1 -Binary ./target/release/keycash-solver.exe
-      - uses: actions/upload-artifact@v7
-        with:
-          name: KeycashSolver-Portable-x86_64
-          path: |
-            dist/KeycashSolver-Portable-x86_64.exe
-            dist/KeycashSolver-Portable-x86_64.exe.sha256
-          if-no-files-found: error
+      - name: Upload Windows files to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload $env:GITHUB_REF_NAME dist/KeycashSolver-Portable-x86_64.exe dist/KeycashSolver-Portable-x86_64.exe.sha256 --repo $env:GITHUB_REPOSITORY --clobber
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs: [alpine, windows]
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: release-files
-          merge-multiple: true
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-files/* --generate-notes --verify-tag
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
