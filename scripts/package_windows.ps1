@@ -19,7 +19,7 @@ Copy-Item (Join-Path $package "runtime\python3.dll") $package
 $cargo = Get-Content (Join-Path $root "Cargo.toml") -Raw
 $version = [regex]::Match($cargo, "(?m)^version = `"([^`"]+)`"").Groups[1].Value
 $build = [ordered]@{
-    name = "keycash-solver"; version = $version; platform = "windows"
+    name = "keycash-solver"; version = $version; author = "xnote12"; platform = "windows"
     architecture = "x86_64"; python_version = "3.12"
     python_source = "embedded"; python_runtime = "bundled"
     entrypoint = "keycash-solver.exe"

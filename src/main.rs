@@ -132,7 +132,8 @@ fn main() -> Result<()> {
     let root = root_path(&args).canonicalize()?;
     if args.iter().any(|x| x == "--help") {
         println!(
-            "Keycash Solver\n\nUsage: keycash-solver [--root PATH] [--data-dir PATH]\n       keycash-solver --self-test\n       keycash-solver --render-preview PATH [--width 80] [--height 28]\n\n1-4: pages. q: exit. Start or Resume explicitly after opening the app."
+            "Keycash Pro v{} by xnote12\n\nUsage: keycash-solver [--root PATH] [--data-dir PATH]\n       keycash-solver --self-test\n       keycash-solver --render-preview PATH [--width 80] [--height 28]\n\n1-4: pages. q: exit. Start or Resume explicitly after opening the app.",
+            env!("CARGO_PKG_VERSION")
         );
         return Ok(());
     }

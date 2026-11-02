@@ -36,7 +36,7 @@ def assemble(output, binary, system, architecture):
     shutil.copy2(ROOT / "scripts/install_alpine.sh", output / "install.sh")
     (output / "install.sh").chmod(0o755)
     build = {
-        "name": "keycash-solver", "version": version, "platform": system,
+        "name": "keycash-solver", "version": version, "author": "xnote12", "platform": system,
         "architecture": architecture,
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
         "python_soabi": sysconfig.get_config_var("SOABI"),

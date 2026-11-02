@@ -9,9 +9,16 @@ GitHub Actions builds two packages after every push to `main`:
 - `keycash-solver-alpine-x86_64.tar.gz` — native Alpine/musl executable and installer.
 - `KeycashSolver-Portable-x86_64.exe` — single-file portable Windows app with its Python 3.12 runtime embedded.
 
-Tagged pushes such as `v0.1.0` also publish both packages to a GitHub Release. Ordinary pushes retain them as workflow artifacts.
+Tagged pushes such as `v1.1.0` also publish both packages to a GitHub Release. Ordinary pushes rebuild and self-test both platforms without publishing downloads.
 
 ## Alpine installation
+
+For a public repository, install the latest release directly:
+
+```sh
+curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
+sh install-keycash.sh
+```
 
 Extract the archive on a matching x86_64 Alpine system, then run:
 
@@ -30,6 +37,8 @@ Application files are installed under `~/.local/lib/keycash-solver`; private dat
 ## Windows portable executable
 
 Download and run `KeycashSolver-Portable-x86_64.exe`. No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The EXE contains the Rust app, Python runtime, and third-party packages.
+
+The Windows launcher opens a fixed 48-column × 32-row portrait console and disables classic-console resize and maximize controls.
 
 On first launch it automatically expands an internal versioned runtime cache under `%LOCALAPPDATA%\KeycashSolver\portable-runtime`; this is an implementation detail and requires no setup. Portable accounts and settings are stored beside the downloaded EXE in `KeycashSolver-data`, so move that folder with the EXE when transferring the app. Each GitHub build runs the final one-file EXE and its offline self-test on Windows.
 
@@ -51,4 +60,4 @@ apk add build-base cargo rust python3-dev python3 py3-httpx py3-beautifulsoup4 c
 sh scripts/build_alpine.sh
 ```
 
-No application Python source is included as loose files in either release package. The source is compiled into the Rust executable with `include_str!`; Python and its third-party libraries remain runtime components.
+No application Python source is included as loose files in either release package. The source is compiled into the Rust executable with `include_str!`. Windows embeds its Python runtime and dependencies in the portable EXE; Alpine uses its system Python packages.

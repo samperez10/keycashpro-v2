@@ -1179,8 +1179,11 @@ fn draw(f: &mut Frame, app: &mut App) {
         Rect::new(header.x + status_x, header.y, status_width, 3),
     );
     f.render_widget(
-        Paragraph::new(format!("KEYCASH v{}", env!("CARGO_PKG_VERSION")))
-            .style(Style::default().fg(t.muted)),
+        Paragraph::new(format!(
+            "Keycash Pro v{} by xnote12",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .style(Style::default().fg(t.muted)),
         Rect::new(header.x, header.y + 3, header.width, 1),
     );
     let wide = area.width >= 110 && area.height >= 28;
@@ -2562,7 +2565,7 @@ mod tests {
                         .buffer()
                         .content
                         .iter()
-                        .any(|c| c.symbol() == "E")
+                        .any(|c| c.symbol() == "K")
                 );
             }
         }
@@ -2912,7 +2915,7 @@ mod tests {
                     .iter()
                     .map(|c| c.symbol())
                     .collect();
-                assert!(text.contains("KEYCASH"));
+                assert!(text.contains("Keycash"));
                 assert!(text.contains(env!("CARGO_PKG_VERSION")));
                 assert!(!text.contains("Asia/Manila"));
             }
@@ -3081,6 +3084,21 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn header_shows_product_version_and_author() {
+        let mut app = App::new(None, true);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(48, 32)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Keycash Pro v1.1.0 by xnote12"));
+    }
+
     #[test]
     fn new_verdict_updates_message_once_and_keeps_robot_static() {
         let mut app = App::new(None, false);
