@@ -90,18 +90,15 @@ jobs:
         run: gh release upload $env:GITHUB_REF_NAME dist/KeycashSolver-Portable-x86_64.exe dist/KeycashSolver-Portable-x86_64.exe.sha256 --repo $env:GITHUB_REPOSITORY --clobber
 
   termux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: [test, prepare_release]
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
       - name: Build and package in ARM64 Termux
         run: |
           mkdir -p dist
           chmod 777 dist
-          docker run --rm --platform linux/arm64 --security-opt seccomp=unconfined -v "$GITHUB_WORKSPACE:/source:ro" -v "$GITHUB_WORKSPACE/dist:/output" termux/termux-docker:aarch64 bash -lc '
+          docker run --rm --security-opt seccomp=unconfined -v "$GITHUB_WORKSPACE:/source:ro" -v "$GITHUB_WORKSPACE/dist:/output" termux/termux-docker:aarch64 bash -lc '
             pkg update -y
             pkg install -y rust python python-pip clang make pkg-config binutils
             cp -R /source "$HOME/keycash"
