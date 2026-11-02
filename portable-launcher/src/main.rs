@@ -12,17 +12,22 @@ const PAYLOAD_ID: &str = env!("KEYCASH_PAYLOAD_ID");
 
 #[cfg(windows)]
 fn configure_compact_console() {
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use windows_sys::Win32::System::Console::{
         COORD, GetConsoleWindow, GetStdHandle, SMALL_RECT, STD_OUTPUT_HANDLE,
         SetConsoleScreenBufferSize, SetConsoleTitleW, SetConsoleWindowInfo,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DeleteMenu, DrawMenuBar, GWL_STYLE, GetSystemMenu, GetWindowLongW, MF_BYCOMMAND,
-        SC_MAXIMIZE, SC_SIZE, SetWindowLongW, WS_MAXIMIZEBOX, WS_SIZEBOX,
+        DeleteMenu, DrawMenuBar, GWL_STYLE, GetForegroundWindow, GetSystemMenu,
+        GetWindowLongW, MF_BYCOMMAND, SC_MAXIMIZE, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOZORDER, SetWindowLongW, SetWindowPos, WS_MAXIMIZEBOX, WS_SIZEBOX,
     };
 
     const WIDTH: i16 = 72;
     const HEIGHT: i16 = 36;
+    const WINDOW_WIDTH: i32 = 700;
+    const WINDOW_HEIGHT: i32 = 650;
+    static TERMINAL_WINDOW: AtomicIsize = AtomicIsize::new(0);
     let title: Vec<u16> = format!("Keycash Pro v{} by xnote12\0", env!("CARGO_PKG_VERSION"))
         .encode_utf16()
         .collect();
@@ -51,7 +56,17 @@ fn configure_compact_console() {
         };
         SetConsoleWindowInfo(output, 1, &compact);
 
-        let window = GetConsoleWindow();
+        let console = GetConsoleWindow();
+        let foreground = GetForegroundWindow();
+        if TERMINAL_WINDOW.load(Ordering::Relaxed) == 0 && !foreground.is_null() {
+            TERMINAL_WINDOW.store(foreground as isize, Ordering::Relaxed);
+        }
+        let saved = TERMINAL_WINDOW.load(Ordering::Relaxed);
+        let window = if saved != 0 {
+            saved as _
+        } else {
+            console
+        };
         if !window.is_null() {
             let style = GetWindowLongW(window, GWL_STYLE);
             SetWindowLongW(
@@ -65,6 +80,15 @@ fn configure_compact_console() {
                 DeleteMenu(menu, SC_MAXIMIZE, MF_BYCOMMAND);
                 DrawMenuBar(window);
             }
+            SetWindowPos(
+                window,
+                std::ptr::null_mut(),
+                0,
+                0,
+                WINDOW_WIDTH,
+                WINDOW_HEIGHT,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
         }
     }
 }
