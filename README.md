@@ -1,6 +1,6 @@
 # Keycash Pro
 
-**Keycash Pro v1.1.5 by xnote12**
+**Keycash Pro v1.1.6 by xnote12**
 
 Terminal-based multi-account Keycash task solver for:
 
@@ -59,9 +59,9 @@ keycash
 
 No installer, ZIP extraction, Python installation, or adjacent dependency folder is required. The launcher keeps the outer Windows Terminal window in a fixed compact portrait layout while allowing the terminal to report its real visible rows.
 
-## Ubuntu 26.04 LTS installation
+## Ubuntu LTS installation
 
-Supported platform: Ubuntu 26.04 LTS CLI/server on amd64.
+Supported platforms: Ubuntu 24.04 LTS and Ubuntu 26.04 LTS CLI/server on amd64. The installer automatically downloads the matching build.
 
 ```sh
 sudo apt-get update
