@@ -1,0 +1,8 @@
+.state/
+.venv/
+target/
+build/
+dist/
+__pycache__/
+*.py[cod]
+read_write_test.txt

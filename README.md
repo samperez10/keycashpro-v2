@@ -1,6 +1,6 @@
 # Keycash Pro
 
-**Keycash Pro v1.1.6 by xnote12**
+**Keycash Pro v1.1.7 by xnote12**
 
 Terminal-based multi-account Keycash task solver for:
 
@@ -46,7 +46,7 @@ bash install-keycash.sh
 keycash
 ```
 
-If `keycash` is not immediately found after a non-root installation:
+The installer adds `~/.local/bin` to your shell profile when needed. For the current shell:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -71,4 +71,18 @@ bash install-keycash.sh
 keycash
 ```
 
-The installer adds the `keycash` command and preserves account data during upgrades.
+The installer adds the `keycash` command, installs a `keycash-solver` alias, and preserves account data during upgrades.
+
+## Debian 13 installation
+
+Supported platform: Debian 13 (Trixie) CLI/server on amd64.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y curl
+curl -fsSL https://github.com/samperez10/keycashpro-v2/releases/latest/download/install.sh -o install-keycash.sh
+bash install-keycash.sh
+keycash
+```
+
+The installer adds `keycash` and `keycash-solver`, updates the shell profile when `~/.local/bin` is not already on `PATH`, and preserves account data during upgrades.
